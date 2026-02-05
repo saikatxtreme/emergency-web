@@ -12,15 +12,16 @@ L.Icon.Default.mergeOptions({
   shadowUrl: require('leaflet/dist/images/marker-shadow.png'),
 });
 
-// --- CONFIGURATION ---
 const SERVER_URL = "https://emergency-server-uybe.onrender.com"; 
 
 const urlParams = new URLSearchParams(window.location.search);
 const QR_ID = urlParams.get('id') || "default-car"; 
 
+// Initialize Socket with robust reconnection settings
 const socket = io(SERVER_URL, {
   transports: ['websocket'], 
   reconnection: true, 
+  reconnectionAttempts: Infinity,
   autoConnect: true,
 });
 
@@ -41,16 +42,28 @@ function App() {
   const mediaRecorderRef = useRef(null);
 
   useEffect(() => {
-    // AUTO-REJOIN
-    const joinRoom = () => {
+    // --- 1. CONNECTION LOGIC ---
+    const handleConnect = () => {
         console.log("Connected. Joining:", QR_ID);
         setStatus("Connected to Owner");
         socket.emit("join-family", QR_ID);
+        
+        // If we have location already, send it immediately
+        if (location) {
+             socket.emit("scan-qr", { qrId: QR_ID, location: {lat: location[0], lng: location[1]} });
+        }
     };
 
-    if(socket.connected) joinRoom();
-
-    socket.on("connect", joinRoom);
+    socket.on("connect", handleConnect);
+    
+    // Heartbeat: Check connection every 5 seconds and rejoin if needed
+    const heartbeat = setInterval(() => {
+        if (socket.connected) {
+            socket.emit("join-family", QR_ID);
+        } else {
+            socket.connect();
+        }
+    }, 5000);
 
     socket.on("receive-chat", (data) => setChat(prev => [...prev, data]));
     
@@ -64,29 +77,34 @@ function App() {
 
     socket.on("disconnect", () => setStatus("Disconnected... Reconnecting"));
 
-    // GPS LOGIC
+    // --- 2. GPS LOGIC ---
     let watchId;
     if (navigator.geolocation) {
         watchId = navigator.geolocation.watchPosition((pos) => {
             const newLoc = [pos.coords.latitude, pos.coords.longitude];
             setLocation(newLoc);
-            socket.emit("scan-qr", { qrId: QR_ID, location: {lat: newLoc[0], lng: newLoc[1]} });
-        }, (err) => console.log(err), { enableHighAccuracy: true });
+            // Only emit if connected to avoid queue buildup
+            if(socket.connected) {
+                socket.emit("scan-qr", { qrId: QR_ID, location: {lat: newLoc[0], lng: newLoc[1]} });
+            }
+        }, (err) => console.log("GPS Error", err), { enableHighAccuracy: true });
     }
 
     return () => {
+        clearInterval(heartbeat);
         socket.off("connect");
         socket.off("receive-chat");
         socket.off("receive-audio");
         socket.off("disconnect");
         if (watchId) navigator.geolocation.clearWatch(watchId);
     };
-  }, []);
+  }, []); // Run once on mount
 
+  // --- 3. ALERT LOGIC (Triggers Ringing on Phone) ---
   const triggerAlert = () => {
       if(window.confirm("🚨 EMERGENCY ALERT \n\nThis will ring the owner's phone immediately. Are you sure?")) {
           socket.emit("trigger-alert", QR_ID);
-          alert("Signal Sent. Help is on the way.");
+          alert("Signal Sent! The owner is being alerted.");
       }
   };
 
