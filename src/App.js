@@ -4,7 +4,8 @@ import { MapContainer, TileLayer, Marker, Popup, useMap } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
 import L from 'leaflet';
 
-// LEAFLET ICON FIX
+// --- LEAFLET ICON FIX ---
+// (Fixes missing marker icons in React Leaflet)
 delete L.Icon.Default.prototype._getIconUrl;
 L.Icon.Default.mergeOptions({
   iconRetinaUrl: require('leaflet/dist/images/marker-icon-2x.png'),
@@ -13,7 +14,6 @@ L.Icon.Default.mergeOptions({
 });
 
 // --- CONFIGURATION ---
-// YOUR LIVE CLOUD SERVER
 const SERVER_URL = "https://emergency-server-uybe.onrender.com"; 
 
 // DYNAMIC ID: Read from URL (e.g. site.com/?id=my-car)
@@ -21,8 +21,12 @@ const urlParams = new URLSearchParams(window.location.search);
 const QR_ID = urlParams.get('id') || "default-car"; 
 
 // Initialize socket
-const socket = io.connect(SERVER_URL);
+const socket = io(SERVER_URL, {
+  transports: ['websocket'], // Force websocket for stability
+  reconnection: true,        // Ensure it tries to reconnect
+});
 
+// Helper component to move map center
 function MapUpdater({ location }) {
   const map = useMap();
   useEffect(() => {
@@ -40,11 +44,19 @@ function App() {
   const mediaRecorderRef = useRef(null);
 
   useEffect(() => {
-    // 1. JOIN THE SPECIFIC FAMILY ID
-    socket.emit("join-family", QR_ID);
+    // --- 1. AUTO-REJOIN LOGIC ---
+    // If server restarts or net drops, immediately re-join the family room.
+    socket.on("connect", () => {
+        console.log("Connected to server");
+        setStatus("Connected to Driver");
+        socket.emit("join-family", QR_ID);
+    });
 
-    const handleConnect = () => setStatus("Connected to Driver");
-    
+    // Handle initial load if socket is already connected
+    if (socket.connected) {
+        socket.emit("join-family", QR_ID);
+    }
+
     const handleChat = (data) => {
         setChat(prev => [...prev, data]);
     };
@@ -59,30 +71,46 @@ function App() {
         }
     };
 
-    socket.on("connect", handleConnect);
+    const handleDisconnect = () => {
+        setStatus("Disconnected... Reconnecting");
+    };
+
     socket.on("receive-chat", handleChat);
     socket.on("receive-audio", handleAudio);
+    socket.on("disconnect", handleDisconnect);
 
-    // GPS Logic
+    // --- 2. GPS LOGIC ---
     let watchId;
     if (navigator.geolocation) {
         watchId = navigator.geolocation.watchPosition((pos) => {
             const newLoc = [pos.coords.latitude, pos.coords.longitude];
             setLocation(newLoc);
+            // Send location to the App
             socket.emit("scan-qr", { qrId: QR_ID, location: {lat: newLoc[0], lng: newLoc[1]} });
         }, (err) => console.log(err), { enableHighAccuracy: true });
     }
 
-    // Cleanup
+    // Cleanup listeners
     return () => {
-        socket.off("connect", handleConnect);
+        socket.off("connect");
         socket.off("receive-chat", handleChat);
         socket.off("receive-audio", handleAudio);
+        socket.off("disconnect", handleDisconnect);
         if (watchId) navigator.geolocation.clearWatch(watchId);
     };
 
   }, []);
 
+  // --- 3. ALERT LOGIC (New) ---
+  const triggerAlert = () => {
+      // Simple confirmation to prevent spamming
+      if(window.confirm("🚨 EMERGENCY ALERT \n\nThis will ring the owner's phone immediately. Are you sure?")) {
+          socket.emit("trigger-alert", QR_ID);
+          alert("Alert Signal Sent! Wait for response.");
+      }
+  };
+
+  // --- AUDIO RECORDING ---
   const startRecording = async () => {
     try {
         const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -107,7 +135,6 @@ function App() {
       setIsRecording(false);
   };
 
-  // Toggle Logic (Hands Free)
   const toggleMic = () => {
       if (isRecording) {
           stopRecording();
@@ -116,16 +143,19 @@ function App() {
       }
   };
 
+  // --- TEXT CHAT ---
   const sendText = (e) => {
     e.preventDefault();
     if (!inputText) return;
     const msg = { qrId: QR_ID, text: inputText, sender: "Helper" };
     socket.emit("send-chat", msg);
+    setChat(prev => [...prev, msg]); // Show my own message
     setInputText("");
   };
 
   return (
     <div style={styles.container}>
+      {/* MAP LAYER */}
       {location ? (
           <MapContainer center={location} zoom={13} style={styles.map} zoomControl={false}>
             <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
@@ -134,6 +164,16 @@ function App() {
           </MapContainer>
       ) : <div style={styles.mapPlaceholder}>Requesting GPS Location...</div>}
 
+      {/* 🚨 ALERT BUTTON (Top Right) */}
+      <button 
+        onClick={triggerAlert}
+        style={styles.alertBtn}
+        title="Ring Owner's Phone"
+      >
+        🚨
+      </button>
+
+      {/* INTERFACE OVERLAY */}
       <div style={styles.overlay}>
         <div style={styles.header}><div style={styles.statusDot}></div> {status}</div>
 
@@ -166,6 +206,17 @@ const styles = {
   container: { height: "100vh", display: "flex", flexDirection: "column", position: 'relative', overflow: 'hidden' },
   map: { position: "absolute", top: 0, left: 0, width: "100%", height: "100%", zIndex: 0 },
   mapPlaceholder: { position: "absolute", width: "100%", height: "100%", background: "#222", color: "white", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 0 },
+  
+  // New Alert Button Style
+  alertBtn: { 
+      position: 'absolute', top: 20, right: 20, zIndex: 999,
+      background: 'red', color: 'white', border: 'none', 
+      width: '60px', height: '60px', fontSize: '24px',
+      borderRadius: '50%', cursor: 'pointer',
+      boxShadow: '0 4px 15px rgba(255,0,0,0.6)',
+      display: 'flex', alignItems: 'center', justifyContent: 'center'
+  },
+
   overlay: { zIndex: 10, position: "absolute", bottom: 0, width: "100%", height: "60%", background: "linear-gradient(to top, rgba(0,0,0,0.9) 60%, transparent)", display: "flex", flexDirection: "column", justifyContent: "flex-end", paddingBottom: 20 },
   header: { position: "absolute", top: -300, left: 20, background: "rgba(0,0,0,0.7)", color: "white", padding: "10px 20px", borderRadius: 20 },
   statusDot: { display: "inline-block", width: 10, height: 10, background: "#0f0", borderRadius: "50%", marginRight: 5 },
