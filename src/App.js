@@ -116,15 +116,15 @@ function App() {
   if (!qrId) return <div className="error-screen"><h1>Invalid QR Code</h1></div>;
 
   return (
-    <div className="container">
-      <header className="header-alert">
-        <FaExclamationTriangle className="alert-icon" />
+    <div className="container" style={{textAlign: 'center', padding: '20px', fontFamily: 'sans-serif'}}>
+      <header className="header-alert" style={{backgroundColor: '#e74c3c', color: 'white', padding: '20px', borderRadius: '10px', marginBottom: '20px'}}>
+        <FaExclamationTriangle size={40} />
         <h1>EMERGENCY ASSIST</h1>
         <p>You are connected to the owner.</p>
       </header>
 
-      <div className="main-actions">
-        <button className="sos-btn" onClick={triggerSOS}>
+      <div className="main-actions" style={{display: 'flex', flexDirection: 'column', gap: '15px'}}>
+        <button className="sos-btn" onClick={triggerSOS} style={{backgroundColor: 'red', color: 'white', padding: '20px', fontSize: '20px', border: 'none', borderRadius: '10px', cursor: 'pointer'}}>
           SEND SOS ALERT 🚨
         </button>
 
@@ -134,27 +134,31 @@ function App() {
           onMouseUp={stopRecording}
           onTouchStart={startRecording}
           onTouchEnd={stopRecording}
+          style={{backgroundColor: isRecording ? '#e74c3c' : '#3498db', color: 'white', padding: '30px', fontSize: '18px', border: 'none', borderRadius: '50px', cursor: 'pointer'}}
         >
-          <FaMicrophone size={30} />
+          <FaMicrophone size={30} style={{display: 'block', margin: '0 auto 10px'}}/>
           {isRecording ? "Release to Send" : "Hold to Speak"}
         </button>
       </div>
 
-      <div className="chat-box">
-        <div className="messages">
+      <div className="chat-box" style={{marginTop: '30px', textAlign: 'left'}}>
+        <div className="messages" style={{height: '200px', overflowY: 'auto', border: '1px solid #ccc', padding: '10px', marginBottom: '10px'}}>
           {messages.map((m, i) => (
-            <div key={i} className={`msg ${m.sender === "Helper" ? "me" : "them"}`}>
-              <strong>{m.sender}: </strong> {m.text}
+            <div key={i} style={{textAlign: m.sender === "Helper" ? "right" : "left", margin: '5px 0'}}>
+              <span style={{backgroundColor: m.sender === "Helper" ? '#dcf8c6' : '#eee', padding: '5px 10px', borderRadius: '5px'}}>
+                <strong>{m.sender}: </strong> {m.text}
+              </span>
             </div>
           ))}
         </div>
-        <div className="input-area">
+        <div className="input-area" style={{display: 'flex'}}>
           <input 
             value={inputText} 
             onChange={(e) => setInputText(e.target.value)} 
             placeholder="Type a message..." 
+            style={{flex: 1, padding: '10px'}}
           />
-          <button onClick={sendMessage}>Send</button>
+          <button onClick={sendMessage} style={{padding: '10px 20px'}}>Send</button>
         </div>
       </div>
     </div>
