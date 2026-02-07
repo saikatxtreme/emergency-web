@@ -1,28 +1,35 @@
 import React, { useEffect, useState, useRef } from "react";
 import io from "socket.io-client";
-import { FaMicrophone, FaPaperPlane, FaExclamationTriangle } from "react-icons/fa";
+import { FaMicrophone, FaPaperPlane, FaExclamationTriangle, FaMapMarkerAlt, FaShieldAlt } from "react-icons/fa";
 import "./App.css"; 
 
-const socket = io("https://emergency-server-uybe.onrender.com", {
-  transports: ["websocket", "polling"]
+// --- CONFIG ---
+const SERVER_URL = "https://emergency-server-uybe.onrender.com";
+
+const socket = io(SERVER_URL, {
+  transports: ["websocket", "polling"],
+  reconnectionAttempts: 10,
 });
 
 function App() {
   const [status, setStatus] = useState("Connecting...");
+  const [isConnected, setIsConnected] = useState(false);
   const [messages, setMessages] = useState([]);
   const [inputText, setInputText] = useState("");
   const [qrId, setQrId] = useState(null);
+  const [isRecording, setIsRecording] = useState(false);
   
-  // AUDIO STATES
-  const [audioState, setAudioState] = useState("idle"); // idle | recording | sent
   const mediaRecorderRef = useRef(null);
   const audioChunksRef = useRef([]);
   const messagesEndRef = useRef(null);
 
-  useEffect(() => {
+  // --- SCROLL TO BOTTOM ---
+  const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]);
+  };
+  useEffect(() => { scrollToBottom(); }, [messages]);
 
+  // --- INITIAL SETUP ---
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const id = params.get("id");
@@ -32,75 +39,111 @@ function App() {
         if (id) {
             socket.emit("join-room", id);
             setStatus("Connected 🟢");
-            // Auto-send location
-            if ("geolocation" in navigator) {
-                navigator.geolocation.getCurrentPosition(
-                    (pos) => socket.emit("critical-alert", { qrId: id, message: "Location Shared", location: pos.coords }),
-                    (err) => console.log(err),
-                    { enableHighAccuracy: true }
-                );
-            }
+            setIsConnected(true);
+            // Auto-send location on first load
+            updateLocation(id, true);
         } else {
-            setStatus("Invalid QR 🔴");
+            setStatus("Invalid QR Code 🔴");
         }
     };
 
     socket.on("connect", handleJoin);
     if(socket.connected) handleJoin();
 
-    socket.on("receive-chat", (data) => setMessages((prev) => [...prev, data]));
+    socket.on("disconnect", () => {
+        setStatus("Disconnected 🔴");
+        setIsConnected(false);
+    });
 
-    return () => { socket.off("connect"); socket.off("receive-chat"); };
+    // --- CHAT LISTENER ---
+    socket.on("receive-chat", (data) => {
+        setMessages((prev) => [...prev, data]);
+    });
+
+    // --- AUDIO LISTENER (FROM MOBILE) ---
+    socket.on("receive-audio", (base64Audio) => {
+        // Instead of auto-play, add to chat so user can click play
+        const audioMsg = {
+            sender: "Family",
+            type: "audio",
+            text: "Sent an audio clip",
+            audioData: base64Audio
+        };
+        setMessages((prev) => [...prev, audioMsg]);
+    });
+
+    return () => { 
+        socket.off("connect"); 
+        socket.off("disconnect");
+        socket.off("receive-chat"); 
+        socket.off("receive-audio"); 
+    };
   }, []);
 
-  // --- NEW AUDIO LOGIC ---
-  const startRecording = async (e) => {
-    e.preventDefault(); // Stop text selection
-    if (audioState === "recording") return;
+  // --- SEND LOCATION (MANUAL & AUTO) ---
+  const updateLocation = (idToUse = qrId, silent = false) => {
+    if (!idToUse) return;
+    if ("geolocation" in navigator) {
+        if(!silent) alert("Updating Location... Please allow GPS.");
+        navigator.geolocation.getCurrentPosition(
+            (pos) => {
+                const { latitude, longitude } = pos.coords;
+                socket.emit("critical-alert", {
+                    qrId: idToUse,
+                    message: "Location Updated",
+                    location: { latitude, longitude }
+                });
+                if(!silent) alert("Location Sent! ✅");
+            },
+            (err) => {
+                console.error(err);
+                if(!silent) alert("Could not get location. Check permissions.");
+            },
+            { enableHighAccuracy: true }
+        );
+    }
+  };
 
+  // --- AUDIO RECORDING (TO MOBILE) ---
+  const startRecording = async (e) => {
+    e.preventDefault();
     try {
-      // Vibration feedback for mobile
-      if (navigator.vibrate) navigator.vibrate(50); 
-      
+      if (navigator.vibrate) navigator.vibrate(50);
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       mediaRecorderRef.current = new MediaRecorder(stream);
       audioChunksRef.current = [];
 
-      mediaRecorderRef.current.ondataavailable = (event) => {
-        if (event.data.size > 0) audioChunksRef.current.push(event.data);
+      mediaRecorderRef.current.ondataavailable = (e) => {
+        if (e.data.size > 0) audioChunksRef.current.push(e.data);
       };
 
       mediaRecorderRef.current.onstop = () => {
-        const audioBlob = new Blob(audioChunksRef.current, { type: "audio/webm" });
+        const blob = new Blob(audioChunksRef.current, { type: "audio/webm" });
         const reader = new FileReader();
-        reader.readAsDataURL(audioBlob);
+        reader.readAsDataURL(blob);
         reader.onloadend = () => {
-          const base64Audio = reader.result;
-          // Send to mobile
-          socket.emit("send-audio", { qrId, audioBase64: base64Audio });
-          
-          // Visual Feedback: Show "Sent" for 1.5 seconds
-          setAudioState("sent");
-          setTimeout(() => setAudioState("idle"), 1500);
+            const base64 = reader.result;
+            socket.emit("send-audio", { qrId, audioBase64: base64 });
+            
+            // Add my own audio to chat for confirmation
+            setMessages(prev => [...prev, { sender: "Helper", type: "audio", audioData: base64 }]);
         };
       };
 
       mediaRecorderRef.current.start();
-      setAudioState("recording");
-    } catch (err) {
-      alert("Microphone permission denied. Please allow access.");
-      setAudioState("idle");
-    }
+      setIsRecording(true);
+    } catch (err) { alert("Microphone access denied."); }
   };
 
   const stopRecording = (e) => {
     e.preventDefault();
-    if (mediaRecorderRef.current && audioState === "recording") {
+    if (mediaRecorderRef.current && isRecording) {
       mediaRecorderRef.current.stop();
-      // Don't set idle here, wait for 'onstop' to set 'sent'
+      setIsRecording(false);
     }
   };
 
+  // --- TEXT CHAT ---
   const sendMessage = (e) => {
     e.preventDefault();
     if (!inputText.trim()) return;
@@ -110,56 +153,81 @@ function App() {
     setInputText("");
   };
 
+  // --- SOS ---
   const triggerSOS = () => {
     if (!qrId) return;
-    if(window.confirm("🚨 SEND SOS ALERT?")) {
+    if(window.confirm("🚨 ARE YOU SURE?\n\nThis will trigger a loud alarm on the owner's phone.")) {
         socket.emit("incoming-alarm", { qrId }); 
-        alert("SOS SENT!");
+        alert("SOS ALARM SENT! 🚨");
     }
   };
 
-  if (!qrId) return <div className="app-container" style={{justifyContent:'center'}}><h2>Invalid QR</h2></div>;
+  if (!qrId) return <div className="app-container" style={{justifyContent:'center', alignItems:'center'}}><h3>🚫 Invalid QR Code</h3></div>;
 
   return (
     <div className="app-container">
+      {/* 1. HEADER */}
       <div className="header">
-        <h2><FaExclamationTriangle color="#ff4444" /> EMERGENCY ASSIST</h2>
-        <span className="status-badge">{status}</span>
+        <div className="brand">
+            <FaShieldAlt color="#ff4444" size={22} />
+            <span>EMERGO ASSIST</span>
+        </div>
+        <span className={`status-badge ${isConnected ? 'connected' : ''}`}>
+            {status}
+        </span>
       </div>
 
-      <div className="control-panel">
-        <button className="sos-btn" onClick={triggerSOS}>SEND SOS ALERT 🚨</button>
+      {/* 2. CONTROL GRID */}
+      <div className="controls-grid">
+        <button className="btn btn-sos" onClick={triggerSOS}>
+            <FaExclamationTriangle /> SEND SOS ALERT
+        </button>
+        
+        <button className="btn btn-loc" onClick={() => updateLocation()}>
+            <FaMapMarkerAlt /> UPDATE LOC
+        </button>
 
-        {/* INTUITIVE AUDIO BUTTON */}
         <button 
-          className={`ptt-btn ${audioState}`}
-          onMouseDown={startRecording}
-          onMouseUp={stopRecording}
-          onTouchStart={startRecording}
-          onTouchEnd={stopRecording}
-          onMouseLeave={stopRecording} // Handles dragging finger off button
+            className={`btn btn-mic ${isRecording ? 'recording' : ''}`}
+            onMouseDown={startRecording}
+            onMouseUp={stopRecording}
+            onTouchStart={startRecording}
+            onTouchEnd={stopRecording}
         >
-          <FaMicrophone size={24} />
-          {audioState === "idle" && "HOLD TO SPEAK"}
-          {audioState === "recording" && "RECORDING... (Release to Send)"}
-          {audioState === "sent" && "AUDIO SENT! ✔️"}
+            <FaMicrophone /> {isRecording ? "RELEASE" : "HOLD TO SPEAK"}
         </button>
       </div>
 
-      <div className="chat-window">
-        <div className="messages">
-          {messages.map((m, i) => (
+      {/* 3. CHAT STREAM */}
+      <div className="chat-area">
+        {messages.length === 0 && <div style={{textAlign:'center', color:'#555', marginTop:30}}>Start messaging the owner...</div>}
+        
+        {messages.map((m, i) => (
             <div key={i} className={`msg ${m.sender === "Helper" ? "me" : "them"}`}>
-              {m.text}
+                <span className="msg-sender">{m.sender}</span>
+                
+                {/* Text Message */}
+                {m.type !== 'audio' && m.text}
+                
+                {/* Audio Message */}
+                {m.type === 'audio' && (
+                    <audio controls src={m.audioData} className="audio-player" />
+                )}
             </div>
-          ))}
-          <div ref={messagesEndRef} />
-        </div>
-        <form className="input-area" onSubmit={sendMessage}>
-          <input value={inputText} onChange={(e) => setInputText(e.target.value)} placeholder="Type message..." />
-          <button type="submit"><FaPaperPlane /></button>
-        </form>
+        ))}
+        <div ref={messagesEndRef} />
       </div>
+
+      {/* 4. INPUT AREA */}
+      <form className="input-area" onSubmit={sendMessage}>
+        <input 
+            className="chat-input"
+            value={inputText} 
+            onChange={(e) => setInputText(e.target.value)} 
+            placeholder="Type message..." 
+        />
+        <button type="submit" className="btn-send"><FaPaperPlane /></button>
+      </form>
     </div>
   );
 }
