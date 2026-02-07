@@ -411,4 +411,4 @@ const styles = {
     letterSpacing: "1px",
     textShadow: "0 2px 4px rgba(0,0,0,0.5)",
   }
-};1
+};
