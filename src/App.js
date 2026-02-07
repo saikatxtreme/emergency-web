@@ -1,15 +1,11 @@
 import React, { useEffect, useState, useRef } from "react";
 import io from "socket.io-client";
-import { FaMicrophone, FaExclamationTriangle, FaPaperPlane } from "react-icons/fa";
+// Use React Icons for polish (Install if missing: npm install react-icons)
+import { FaMicrophone, FaPaperPlane, FaExclamationTriangle, FaMapMarkerAlt } from "react-icons/fa";
 import "./App.css"; 
 
-// --- CONFIG ---
-const SERVER_URL = "https://emergency-server-uybe.onrender.com";
-
-// Connection Options (Polling first for reliability)
-const socket = io(SERVER_URL, {
-  transports: ["websocket", "polling"],
-  reconnectionAttempts: 5
+const socket = io("https://emergency-server-uybe.onrender.com", {
+  transports: ["websocket", "polling"]
 });
 
 function App() {
@@ -21,135 +17,122 @@ function App() {
   
   const mediaRecorderRef = useRef(null);
   const audioChunksRef = useRef([]);
+  const messagesEndRef = useRef(null);
+
+  // Auto-scroll to bottom of chat
+  const scrollToBottom = () => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  };
 
   useEffect(() => {
-    // 1. GET QR ID FROM URL
+    scrollToBottom();
+  }, [messages]);
+
+  useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const id = params.get("id");
     setQrId(id);
 
-    // 2. JOIN ROOM LOGIC (CRITICAL FIX)
     const handleJoin = () => {
         if (id) {
-            console.log("Joining Room:", id);
             socket.emit("join-room", id);
             setStatus("Connected to Family 🟢");
-            // Send location immediately when connected
-            sendLocation(id);
+            // Auto-send location on join
+            if ("geolocation" in navigator) {
+                navigator.geolocation.getCurrentPosition(
+                    (pos) => {
+                        socket.emit("critical-alert", {
+                            qrId: id,
+                            message: "Location Shared",
+                            location: { latitude: pos.coords.latitude, longitude: pos.coords.longitude }
+                        });
+                    },
+                    (err) => console.log(err),
+                    { enableHighAccuracy: true }
+                );
+            }
         } else {
             setStatus("Invalid QR Code 🔴");
         }
     };
 
-    // Join on connect and reconnect
     socket.on("connect", handleJoin);
-    if (socket.connected) handleJoin();
+    if(socket.connected) handleJoin();
 
-    // 3. LISTEN FOR EVENTS
-    socket.on("receive-chat", (data) => {
-      console.log("Chat Received:", data);
-      setMessages((prev) => [...prev, data]);
-    });
+    socket.on("receive-chat", (data) => setMessages((prev) => [...prev, data]));
 
     socket.on("receive-audio", (base64Audio) => {
       try {
         const audio = new Audio(base64Audio);
-        audio.play().catch(e => console.error("Audio Play Error:", e));
-      } catch (e) { console.error("Audio Decode Error:", e); }
+        audio.play();
+      } catch(e) {}
     });
 
     return () => {
-      socket.off("connect", handleJoin);
-      socket.off("receive-chat");
-      socket.off("receive-audio");
+        socket.off("connect");
+        socket.off("receive-chat");
+        socket.off("receive-audio");
     };
   }, []);
 
-  // --- LOCATION LOGIC ---
-  const sendLocation = (id) => {
-    if ("geolocation" in navigator) {
-      navigator.geolocation.getCurrentPosition(
-        (position) => {
-          const { latitude, longitude } = position.coords;
-          // Sends to 'critical-alert' so mobile app sees it as a Location Update
-          socket.emit("critical-alert", {
-            qrId: id,
-            message: "QR SCANNED! Location Shared.",
-            location: { latitude, longitude }
-          });
-        },
-        (err) => console.error("Location permission denied", err),
-        { enableHighAccuracy: true }
-      );
+  // --- ACTIONS ---
+  const triggerSOS = () => {
+    if (!qrId) return;
+    if(window.confirm("🚨 SEND EMERGENCY ALERT?\n\nThis will trigger a loud alarm on the owner's device.")) {
+        socket.emit("incoming-alarm", { qrId }); 
+        alert("SOS SENT! Owner alerted.");
     }
   };
 
-  // --- SOS LOGIC ---
-  const triggerSOS = () => {
-    if (!qrId) return;
-    socket.emit("incoming-alarm", { qrId }); // Triggers phone vibration/sound
-    alert("🚨 SOS SIGNAL SENT! The owner has been alerted.");
-  };
-
-  // --- AUDIO LOGIC ---
   const startRecording = async () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       mediaRecorderRef.current = new MediaRecorder(stream);
       audioChunksRef.current = [];
-
-      mediaRecorderRef.current.ondataavailable = (event) => {
-        if (event.data.size > 0) audioChunksRef.current.push(event.data);
-      };
-
+      mediaRecorderRef.current.ondataavailable = (e) => { if (e.data.size > 0) audioChunksRef.current.push(e.data); };
       mediaRecorderRef.current.onstop = () => {
-        const audioBlob = new Blob(audioChunksRef.current, { type: "audio/webm" });
+        const blob = new Blob(audioChunksRef.current, { type: "audio/webm" });
         const reader = new FileReader();
-        reader.readAsDataURL(audioBlob);
+        reader.readAsDataURL(blob);
         reader.onloadend = () => {
-          const base64Audio = reader.result; 
-          socket.emit("send-audio", { qrId, audioBase64: base64Audio });
+            socket.emit("send-audio", { qrId, audioBase64: reader.result });
         };
       };
-
       mediaRecorderRef.current.start();
       setIsRecording(true);
-    } catch (err) {
-      alert("Please allow microphone access to use the Walkie-Talkie.");
-    }
+    } catch (err) { alert("Microphone access needed."); }
   };
 
   const stopRecording = () => {
-    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
-      mediaRecorderRef.current.stop();
-      setIsRecording(false);
+    if (mediaRecorderRef.current) {
+        mediaRecorderRef.current.stop();
+        setIsRecording(false);
     }
   };
 
-  // --- CHAT LOGIC ---
-  const sendMessage = () => {
+  const sendMessage = (e) => {
+    e.preventDefault();
     if (!inputText.trim()) return;
     const msg = { qrId, text: inputText, sender: "Helper" };
-    socket.emit("send-chat", msg); // Matches Mobile App listener
+    socket.emit("send-chat", msg);
     setMessages((prev) => [...prev, msg]);
     setInputText("");
   };
 
-  if (!qrId) return <div style={{padding:50, textAlign:"center", fontFamily:"sans-serif"}}><h1>❌ Invalid QR Link</h1></div>;
+  if (!qrId) return <div className="app-container" style={{justifyContent:'center', alignItems:'center'}}><h2>🚫 Invalid QR Code</h2></div>;
 
   return (
     <div className="app-container">
-      <div className="header-alert">
-        <FaExclamationTriangle className="alert-icon" />
-        <div>
-            <h2>EMERGENCY ASSIST</h2>
-            <small>{status}</small>
-        </div>
+      {/* HEADER */}
+      <div className="header">
+        <h2><FaExclamationTriangle color="#ff4444" /> EMERGENCY ASSIST</h2>
+        <span className="status-badge">{status}</span>
       </div>
 
-      <div className="controls">
+      {/* CONTROLS */}
+      <div className="control-panel">
         <button className="sos-btn" onClick={triggerSOS}>
-          🚨 SEND SOS ALERT
+          SEND SOS ALERT 🚨
         </button>
 
         <button 
@@ -159,30 +142,31 @@ function App() {
           onTouchStart={startRecording}
           onTouchEnd={stopRecording}
         >
-          <FaMicrophone size={24} />
+          <FaMicrophone size={20} />
           {isRecording ? "Release to Send" : "Hold to Speak"}
         </button>
       </div>
 
-      <div className="chat-interface">
-        <div className="messages-list">
-          {messages.length === 0 && <div style={{color:'#ccc', textAlign:'center', marginTop:20}}>No messages yet...</div>}
+      {/* CHAT */}
+      <div className="chat-window">
+        <div className="messages">
+          {messages.length === 0 && <div style={{textAlign:'center', color:'#555', marginTop: 20}}>No messages yet...</div>}
           {messages.map((m, i) => (
-            <div key={i} className={`msg-bubble ${m.sender === "Helper" ? "me" : "them"}`}>
-              <strong>{m.sender}: </strong> {m.text}
+            <div key={i} className={`msg ${m.sender === "Helper" ? "me" : "them"}`}>
+              {m.text}
             </div>
           ))}
+          <div ref={messagesEndRef} />
         </div>
         
-        <div className="input-bar">
+        <form className="input-area" onSubmit={sendMessage}>
           <input 
             value={inputText} 
             onChange={(e) => setInputText(e.target.value)} 
             placeholder="Type message..." 
-            onKeyPress={(e) => e.key === 'Enter' && sendMessage()}
           />
-          <button onClick={sendMessage}><FaPaperPlane /></button>
-        </div>
+          <button type="submit"><FaPaperPlane /></button>
+        </form>
       </div>
     </div>
   );

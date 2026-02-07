@@ -1,38 +1,185 @@
-.App {
+/* App.css - Professional Emergency UI */
+:root {
+  --danger-red: #ff4444;
+  --pulse-red: rgba(255, 68, 68, 0.4);
+  --dark-bg: #1a1a1a;
+  --card-bg: #2d2d2d;
+  --text-white: #ffffff;
+  --accent-blue: #2196F3;
+}
+
+body {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  background-color: var(--dark-bg);
+  color: var(--text-white);
+  height: 100vh;
+  overflow: hidden; /* Prevent full page scroll */
+}
+
+.app-container {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  max-width: 600px;
+  margin: 0 auto;
+  background-color: var(--dark-bg);
+  box-shadow: 0 0 20px rgba(0,0,0,0.5);
+}
+
+/* --- HEADER --- */
+.header {
+  background-color: var(--card-bg);
+  padding: 15px;
   text-align: center;
-}
-
-.App-logo {
-  height: 40vmin;
-  pointer-events: none;
-}
-
-@media (prefers-reduced-motion: no-preference) {
-  .App-logo {
-    animation: App-logo-spin infinite 20s linear;
-  }
-}
-
-.App-header {
-  background-color: #282c34;
-  min-height: 100vh;
+  border-bottom: 1px solid #444;
   display: flex;
   flex-direction: column;
   align-items: center;
-  justify-content: center;
-  font-size: calc(10px + 2vmin);
+  gap: 5px;
+}
+
+.header h2 {
+  margin: 0;
+  font-size: 1.2rem;
+  letter-spacing: 1px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.status-badge {
+  background-color: #333;
+  padding: 4px 12px;
+  border-radius: 12px;
+  font-size: 0.8rem;
+  font-weight: bold;
+  color: #4CAF50; /* Green for connected */
+}
+
+/* --- BIG BUTTONS AREA --- */
+.control-panel {
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 15px;
+  background: linear-gradient(180deg, var(--card-bg) 0%, var(--dark-bg) 100%);
+}
+
+.sos-btn {
+  background-color: var(--danger-red);
   color: white;
+  border: none;
+  padding: 18px;
+  border-radius: 12px;
+  font-size: 1.1rem;
+  font-weight: 900;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  box-shadow: 0 0 0 0 var(--pulse-red);
+  animation: pulse-red 2s infinite;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
 }
 
-.App-link {
-  color: #61dafb;
+@keyframes pulse-red {
+  0% { transform: scale(0.95); box-shadow: 0 0 0 0 var(--pulse-red); }
+  70% { transform: scale(1); box-shadow: 0 0 0 10px rgba(0, 0, 0, 0); }
+  100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(0, 0, 0, 0); }
 }
 
-@keyframes App-logo-spin {
-  from {
-    transform: rotate(0deg);
-  }
-  to {
-    transform: rotate(360deg);
-  }
+.ptt-btn {
+  background-color: var(--accent-blue);
+  color: white;
+  border: none;
+  padding: 18px;
+  border-radius: 12px;
+  font-size: 1.1rem;
+  font-weight: bold;
+  cursor: pointer;
+  transition: all 0.2s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+}
+
+.ptt-btn:active, .ptt-btn.recording {
+  background-color: #1976D2;
+  transform: scale(0.98);
+  border: 2px solid white;
+}
+
+/* --- CHAT AREA --- */
+.chat-window {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  background-color: #111;
+  overflow: hidden; /* Contains scroll */
+  border-top: 1px solid #333;
+}
+
+.messages {
+  flex: 1;
+  padding: 15px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.msg {
+  max-width: 80%;
+  padding: 10px 14px;
+  border-radius: 18px;
+  font-size: 0.95rem;
+  line-height: 1.4;
+}
+
+.msg.me {
+  align-self: flex-end;
+  background-color: var(--accent-blue);
+  color: white;
+  border-bottom-right-radius: 4px;
+}
+
+.msg.them {
+  align-self: flex-start;
+  background-color: #333;
+  color: #eee;
+  border-bottom-left-radius: 4px;
+}
+
+/* --- INPUT AREA --- */
+.input-area {
+  padding: 10px;
+  background-color: var(--card-bg);
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.input-area input {
+  flex: 1;
+  padding: 12px;
+  border-radius: 25px;
+  border: 1px solid #555;
+  background-color: #222;
+  color: white;
+  outline: none;
+  font-size: 1rem;
+}
+
+.input-area button {
+  background-color: var(--accent-blue);
+  color: white;
+  border: none;
+  padding: 12px 20px;
+  border-radius: 25px;
+  font-weight: bold;
+  cursor: pointer;
 }
