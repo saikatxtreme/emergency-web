@@ -1,11 +1,15 @@
 import React, { useEffect, useState, useRef } from "react";
 import io from "socket.io-client";
-import { FaMicrophone, FaMapMarkerAlt, FaExclamationTriangle } from "react-icons/fa";
-import "./App.css"; // Ensure you have basic CSS for centering
+import { FaMicrophone, FaExclamationTriangle, FaPaperPlane } from "react-icons/fa";
+import "./App.css"; 
 
-// CONNECT TO SERVER
-const socket = io("https://emergency-server-uybe.onrender.com", {
-  transports: ["websocket", "polling"]
+// --- CONFIG ---
+const SERVER_URL = "https://emergency-server-uybe.onrender.com";
+
+// Connection Options (Polling first for reliability)
+const socket = io(SERVER_URL, {
+  transports: ["websocket", "polling"],
+  reconnectionAttempts: 5
 });
 
 function App() {
@@ -19,30 +23,46 @@ function App() {
   const audioChunksRef = useRef([]);
 
   useEffect(() => {
-    // 1. GET QR ID FROM URL (e.g., mysite.com?id=SmithFamily)
+    // 1. GET QR ID FROM URL
     const params = new URLSearchParams(window.location.search);
     const id = params.get("id");
     setQrId(id);
 
-    if (id) {
-      socket.emit("join-room", id);
-      setStatus("Connected to Family 🟢");
-      sendLocation(id);
-    } else {
-      setStatus("Invalid QR Code 🔴");
-    }
+    // 2. JOIN ROOM LOGIC (CRITICAL FIX)
+    const handleJoin = () => {
+        if (id) {
+            console.log("Joining Room:", id);
+            socket.emit("join-room", id);
+            setStatus("Connected to Family 🟢");
+            // Send location immediately when connected
+            sendLocation(id);
+        } else {
+            setStatus("Invalid QR Code 🔴");
+        }
+    };
 
-    // 2. LISTEN FOR MESSAGES & AUDIO FROM FAMILY
+    // Join on connect and reconnect
+    socket.on("connect", handleJoin);
+    if (socket.connected) handleJoin();
+
+    // 3. LISTEN FOR EVENTS
     socket.on("receive-chat", (data) => {
+      console.log("Chat Received:", data);
       setMessages((prev) => [...prev, data]);
     });
 
     socket.on("receive-audio", (base64Audio) => {
-      const audio = new Audio(base64Audio);
-      audio.play().catch(e => console.log("Audio play error", e));
+      try {
+        const audio = new Audio(base64Audio);
+        audio.play().catch(e => console.error("Audio Play Error:", e));
+      } catch (e) { console.error("Audio Decode Error:", e); }
     });
 
-    return () => socket.disconnect();
+    return () => {
+      socket.off("connect", handleJoin);
+      socket.off("receive-chat");
+      socket.off("receive-audio");
+    };
   }, []);
 
   // --- LOCATION LOGIC ---
@@ -51,19 +71,27 @@ function App() {
       navigator.geolocation.getCurrentPosition(
         (position) => {
           const { latitude, longitude } = position.coords;
+          // Sends to 'critical-alert' so mobile app sees it as a Location Update
           socket.emit("critical-alert", {
             qrId: id,
             message: "QR SCANNED! Location Shared.",
-            location: { latitude, longitude } // Standard format for Mobile
+            location: { latitude, longitude }
           });
         },
-        (error) => console.error("Location error", error),
+        (err) => console.error("Location permission denied", err),
         { enableHighAccuracy: true }
       );
     }
   };
 
-  // --- AUDIO LOGIC (WEB) ---
+  // --- SOS LOGIC ---
+  const triggerSOS = () => {
+    if (!qrId) return;
+    socket.emit("incoming-alarm", { qrId }); // Triggers phone vibration/sound
+    alert("🚨 SOS SIGNAL SENT! The owner has been alerted.");
+  };
+
+  // --- AUDIO LOGIC ---
   const startRecording = async () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -79,7 +107,7 @@ function App() {
         const reader = new FileReader();
         reader.readAsDataURL(audioBlob);
         reader.onloadend = () => {
-          const base64Audio = reader.result; // DataURL
+          const base64Audio = reader.result; 
           socket.emit("send-audio", { qrId, audioBase64: base64Audio });
         };
       };
@@ -87,78 +115,73 @@ function App() {
       mediaRecorderRef.current.start();
       setIsRecording(true);
     } catch (err) {
-      alert("Microphone access denied. Please enable permissions.");
+      alert("Please allow microphone access to use the Walkie-Talkie.");
     }
   };
 
   const stopRecording = () => {
-    if (mediaRecorderRef.current) {
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
       mediaRecorderRef.current.stop();
       setIsRecording(false);
     }
   };
 
-  // --- SOS ALERT ---
-  const triggerSOS = () => {
-    if (!qrId) return;
-    socket.emit("incoming-alarm", { qrId }); // Triggers loud alarm on phone
-    alert("SOS Signal Sent to Family!");
-  };
-
+  // --- CHAT LOGIC ---
   const sendMessage = () => {
     if (!inputText.trim()) return;
     const msg = { qrId, text: inputText, sender: "Helper" };
-    socket.emit("send-chat", msg);
+    socket.emit("send-chat", msg); // Matches Mobile App listener
     setMessages((prev) => [...prev, msg]);
     setInputText("");
   };
 
-  if (!qrId) return <div className="error-screen"><h1>Invalid QR Code</h1></div>;
+  if (!qrId) return <div style={{padding:50, textAlign:"center", fontFamily:"sans-serif"}}><h1>❌ Invalid QR Link</h1></div>;
 
   return (
-    <div className="container" style={{textAlign: 'center', padding: '20px', fontFamily: 'sans-serif'}}>
-      <header className="header-alert" style={{backgroundColor: '#e74c3c', color: 'white', padding: '20px', borderRadius: '10px', marginBottom: '20px'}}>
-        <FaExclamationTriangle size={40} />
-        <h1>EMERGENCY ASSIST</h1>
-        <p>You are connected to the owner.</p>
-      </header>
+    <div className="app-container">
+      <div className="header-alert">
+        <FaExclamationTriangle className="alert-icon" />
+        <div>
+            <h2>EMERGENCY ASSIST</h2>
+            <small>{status}</small>
+        </div>
+      </div>
 
-      <div className="main-actions" style={{display: 'flex', flexDirection: 'column', gap: '15px'}}>
-        <button className="sos-btn" onClick={triggerSOS} style={{backgroundColor: 'red', color: 'white', padding: '20px', fontSize: '20px', border: 'none', borderRadius: '10px', cursor: 'pointer'}}>
-          SEND SOS ALERT 🚨
+      <div className="controls">
+        <button className="sos-btn" onClick={triggerSOS}>
+          🚨 SEND SOS ALERT
         </button>
 
         <button 
-          className={`ptt-btn ${isRecording ? "recording" : ""}`}
+          className={`ptt-btn ${isRecording ? 'recording' : ''}`}
           onMouseDown={startRecording}
           onMouseUp={stopRecording}
           onTouchStart={startRecording}
           onTouchEnd={stopRecording}
-          style={{backgroundColor: isRecording ? '#e74c3c' : '#3498db', color: 'white', padding: '30px', fontSize: '18px', border: 'none', borderRadius: '50px', cursor: 'pointer'}}
         >
-          <FaMicrophone size={30} style={{display: 'block', margin: '0 auto 10px'}}/>
+          <FaMicrophone size={24} />
           {isRecording ? "Release to Send" : "Hold to Speak"}
         </button>
       </div>
 
-      <div className="chat-box" style={{marginTop: '30px', textAlign: 'left'}}>
-        <div className="messages" style={{height: '200px', overflowY: 'auto', border: '1px solid #ccc', padding: '10px', marginBottom: '10px'}}>
+      <div className="chat-interface">
+        <div className="messages-list">
+          {messages.length === 0 && <div style={{color:'#ccc', textAlign:'center', marginTop:20}}>No messages yet...</div>}
           {messages.map((m, i) => (
-            <div key={i} style={{textAlign: m.sender === "Helper" ? "right" : "left", margin: '5px 0'}}>
-              <span style={{backgroundColor: m.sender === "Helper" ? '#dcf8c6' : '#eee', padding: '5px 10px', borderRadius: '5px'}}>
-                <strong>{m.sender}: </strong> {m.text}
-              </span>
+            <div key={i} className={`msg-bubble ${m.sender === "Helper" ? "me" : "them"}`}>
+              <strong>{m.sender}: </strong> {m.text}
             </div>
           ))}
         </div>
-        <div className="input-area" style={{display: 'flex'}}>
+        
+        <div className="input-bar">
           <input 
             value={inputText} 
             onChange={(e) => setInputText(e.target.value)} 
-            placeholder="Type a message..." 
-            style={{flex: 1, padding: '10px'}}
+            placeholder="Type message..." 
+            onKeyPress={(e) => e.key === 'Enter' && sendMessage()}
           />
-          <button onClick={sendMessage} style={{padding: '10px 20px'}}>Send</button>
+          <button onClick={sendMessage}><FaPaperPlane /></button>
         </div>
       </div>
     </div>
