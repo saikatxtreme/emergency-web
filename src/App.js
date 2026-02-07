@@ -99,6 +99,7 @@ export default function App() {
         socket.off("disconnect");
         if (watchId) navigator.geolocation.clearWatch(watchId);
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // --- ACTIONS ---
