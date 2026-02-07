@@ -3,6 +3,8 @@ import io from 'socket.io-client';
 import { MapContainer, TileLayer, Marker, Popup, useMap } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
 import L from 'leaflet';
+import { FaMicrophone, FaPaperPlane, FaBell, FaCircle, FaStop, FaMapMarkerAlt } from 'react-icons/fa';
+import { motion, AnimatePresence } from 'framer-motion';
 
 // --- LEAFLET ICON FIX ---
 delete L.Icon.Default.prototype._getIconUrl;
@@ -13,11 +15,10 @@ L.Icon.Default.mergeOptions({
 });
 
 const SERVER_URL = "https://emergency-server-uybe.onrender.com"; 
-
 const urlParams = new URLSearchParams(window.location.search);
 const QR_ID = urlParams.get('id') || "default-car"; 
 
-// Initialize Socket with robust reconnection settings
+// Initialize Socket
 const socket = io(SERVER_URL, {
   transports: ['websocket'], 
   reconnection: true, 
@@ -25,30 +26,35 @@ const socket = io(SERVER_URL, {
   autoConnect: true,
 });
 
+// Component to fly map to new location
 function MapUpdater({ location }) {
   const map = useMap();
   useEffect(() => {
-    if (location) map.flyTo(location, 15);
+    if (location) map.flyTo(location, 16, { animate: true, duration: 1.5 });
   }, [location, map]);
   return null;
 }
 
-function App() {
+export default function App() {
   const [status, setStatus] = useState("Connecting...");
   const [chat, setChat] = useState([]);
   const [inputText, setInputText] = useState("");
-  const [location, setLocation] = useState(null);
+  const [location, setLocation] = useState(null); // Default to null, will wait for GPS
   const [isRecording, setIsRecording] = useState(false);
   const mediaRecorderRef = useRef(null);
+  const chatEndRef = useRef(null);
+
+  // Auto-scroll chat
+  useEffect(() => {
+    chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [chat]);
 
   useEffect(() => {
-    // --- 1. CONNECTION LOGIC ---
+    // --- CONNECTION LOGIC ---
     const handleConnect = () => {
         console.log("Connected. Joining:", QR_ID);
-        setStatus("Connected to Owner");
+        setStatus("LIVE LINK ACTIVE");
         socket.emit("join-family", QR_ID);
-        
-        // If we have location already, send it immediately
         if (location) {
              socket.emit("scan-qr", { qrId: QR_ID, location: {lat: location[0], lng: location[1]} });
         }
@@ -56,34 +62,29 @@ function App() {
 
     socket.on("connect", handleConnect);
     
-    // Heartbeat: Check connection every 5 seconds and rejoin if needed
+    // Heartbeat
     const heartbeat = setInterval(() => {
-        if (socket.connected) {
-            socket.emit("join-family", QR_ID);
-        } else {
-            socket.connect();
-        }
+        if (socket.connected) socket.emit("join-family", QR_ID);
+        else socket.connect();
     }, 5000);
 
     socket.on("receive-chat", (data) => setChat(prev => [...prev, data]));
     
     socket.on("receive-audio", (audioBase64) => {
-        console.log("Audio Received");
         try {
             const audio = new Audio(audioBase64);
             audio.play().catch(e => console.log("Autoplay blocked"));
         } catch (e) { console.error(e); }
     });
 
-    socket.on("disconnect", () => setStatus("Disconnected... Reconnecting"));
+    socket.on("disconnect", () => setStatus("SIGNAL LOST - RECONNECTING..."));
 
-    // --- 2. GPS LOGIC ---
+    // --- GPS LOGIC ---
     let watchId;
     if (navigator.geolocation) {
         watchId = navigator.geolocation.watchPosition((pos) => {
             const newLoc = [pos.coords.latitude, pos.coords.longitude];
             setLocation(newLoc);
-            // Only emit if connected to avoid queue buildup
             if(socket.connected) {
                 socket.emit("scan-qr", { qrId: QR_ID, location: {lat: newLoc[0], lng: newLoc[1]} });
             }
@@ -98,13 +99,13 @@ function App() {
         socket.off("disconnect");
         if (watchId) navigator.geolocation.clearWatch(watchId);
     };
-  }, []); // Run once on mount
+  }, []);
 
-  // --- 3. ALERT LOGIC (Triggers Ringing on Phone) ---
+  // --- ACTIONS ---
   const triggerAlert = () => {
-      if(window.confirm("🚨 EMERGENCY ALERT \n\nThis will ring the owner's phone immediately. Are you sure?")) {
+      if(window.confirm("🚨 SEND EMERGENCY ALERT?\n\nThis will trigger a loud alarm on the owner's device.")) {
           socket.emit("trigger-alert", QR_ID);
-          alert("Signal Sent! The owner is being alerted.");
+          alert("ALERT SENT");
       }
   };
 
@@ -124,15 +125,13 @@ function App() {
         };
         mediaRecorderRef.current.start();
         setIsRecording(true);
-    } catch (err) { alert("Mic blocked! Please allow microphone access."); }
+    } catch (err) { alert("Mic Access Denied"); }
   };
 
   const stopRecording = () => {
       if (mediaRecorderRef.current) mediaRecorderRef.current.stop();
       setIsRecording(false);
   };
-
-  const toggleMic = () => { if (isRecording) stopRecording(); else startRecording(); };
 
   const sendText = (e) => {
     e.preventDefault();
@@ -144,60 +143,272 @@ function App() {
   };
 
   return (
-    <div style={styles.container}>
-      {location ? (
-          <MapContainer center={location} zoom={13} style={styles.map} zoomControl={false}>
-            <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
-            <Marker position={location}><Popup>Vehicle Location</Popup></Marker>
+    <div style={styles.dashboard}>
+      
+      {/* --- LAYER 1: THE MAP (BACKGROUND) --- */}
+      <div style={styles.mapContainer}>
+        {location ? (
+          <MapContainer center={location} zoom={13} style={{ width: '100%', height: '100%' }} zoomControl={false}>
+            {/* Dark Mode Map Tiles */}
+            <TileLayer url="https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png" />
+            <Marker position={location}>
+                <Popup>
+                    <div style={{color: 'black'}}>Last Known Position</div>
+                </Popup>
+            </Marker>
             <MapUpdater location={location} />
           </MapContainer>
-      ) : <div style={styles.mapPlaceholder}>Requesting GPS Location...</div>}
+        ) : (
+          <div style={styles.loadingScreen}>
+            <FaMapMarkerAlt size={50} color="#e74c3c" />
+            <p>ACQUIRING SATELLITE FIX...</p>
+          </div>
+        )}
+      </div>
 
-      <button onClick={triggerAlert} style={styles.alertBtn} title="Ring Owner's Phone">🚨</button>
+      {/* --- LAYER 2: TOP BAR (STATUS) --- */}
+      <div style={styles.topBar}>
+        <div style={styles.statusBadge}>
+            <motion.div 
+                animate={{ opacity: [1, 0.5, 1] }} 
+                transition={{ duration: 2, repeat: Infinity }}
+            >
+                <FaCircle color={status.includes("ACTIVE") ? "#2ecc71" : "#e74c3c"} size={12} />
+            </motion.div>
+            <span style={styles.statusText}>{status}</span>
+        </div>
+        <button onClick={triggerAlert} style={styles.alertButton}>
+            <FaBell /> SOS ALERT
+        </button>
+      </div>
 
-      <div style={styles.overlay}>
-        <div style={styles.header}><div style={styles.statusDot}></div> {status}</div>
-
-        <div style={styles.chatBox}>
-            {chat.map((msg, i) => (
-                <div key={i} style={msg.sender === "Helper" ? styles.myMsg : styles.theirMsg}>
-                    <b>{msg.sender}:</b> {msg.text}
-                </div>
-            ))}
+      {/* --- LAYER 3: BOTTOM CONSOLE (CHAT & MIC) --- */}
+      <div style={styles.console}>
+        
+        {/* Chat Area */}
+        <div style={styles.chatWindow}>
+            <div style={styles.chatFeed}>
+                <AnimatePresence>
+                    {chat.map((msg, i) => (
+                        <motion.div 
+                            key={i} 
+                            initial={{ opacity: 0, y: 10 }} 
+                            animate={{ opacity: 1, y: 0 }}
+                            style={msg.sender === "Helper" ? styles.msgSelf : styles.msgOther}
+                        >
+                            <span style={styles.msgLabel}>{msg.sender}</span>
+                            {msg.text}
+                        </motion.div>
+                    ))}
+                    <div ref={chatEndRef} />
+                </AnimatePresence>
+            </div>
+            
+            <form onSubmit={sendText} style={styles.inputRow}>
+                <input 
+                    value={inputText} 
+                    onChange={(e) => setInputText(e.target.value)} 
+                    placeholder="Type to dispatch..." 
+                    style={styles.input} 
+                />
+                <button type="submit" style={styles.sendBtn}><FaPaperPlane /></button>
+            </form>
         </div>
 
-        <form onSubmit={sendText} style={styles.inputForm}>
-            <input value={inputText} onChange={(e) => setInputText(e.target.value)} placeholder="Type message..." style={styles.input} />
-            <button type="submit" style={styles.sendBtn}>➤</button>
-        </form>
+        {/* PTT Button */}
+        <div style={styles.micControl}>
+            <motion.button 
+                whileTap={{ scale: 0.9 }}
+                animate={isRecording ? { boxShadow: "0px 0px 20px #e74c3c" } : {}}
+                onClick={isRecording ? stopRecording : startRecording}
+                style={{
+                    ...styles.micBtn, 
+                    background: isRecording ? "#e74c3c" : "#34495e"
+                }}
+            >
+                {isRecording ? <FaStop size={24} /> : <FaMicrophone size={24} />}
+            </motion.button>
+            <span style={styles.micLabel}>{isRecording ? "TRANSMITTING..." : "PUSH TO TALK"}</span>
+        </div>
 
-        <button 
-            onClick={toggleMic}
-            style={{...styles.micBtn, background: isRecording ? "red" : "#D32F2F", animation: isRecording ? "pulse 1s infinite" : "none"}}
-        >
-            {isRecording ? "🛑" : "🎙️"}
-        </button>
-        <style>{`@keyframes pulse { 0% { transform: scale(1); } 50% { transform: scale(1.1); } 100% { transform: scale(1); } }`}</style>
       </div>
     </div>
   );
 }
 
+// --- FUTURISTIC STYLES ---
 const styles = {
-  container: { height: "100vh", display: "flex", flexDirection: "column", position: 'relative', overflow: 'hidden' },
-  map: { position: "absolute", top: 0, left: 0, width: "100%", height: "100%", zIndex: 0 },
-  mapPlaceholder: { position: "absolute", width: "100%", height: "100%", background: "#222", color: "white", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 0 },
-  alertBtn: { position: 'absolute', top: 20, right: 20, zIndex: 999, background: 'red', color: 'white', border: 'none', width: '60px', height: '60px', fontSize: '24px', borderRadius: '50%', cursor: 'pointer', boxShadow: '0 4px 15px rgba(255,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center' },
-  overlay: { zIndex: 10, position: "absolute", bottom: 0, width: "100%", height: "60%", background: "linear-gradient(to top, rgba(0,0,0,0.9) 60%, transparent)", display: "flex", flexDirection: "column", justifyContent: "flex-end", paddingBottom: 20 },
-  header: { position: "absolute", top: -300, left: 20, background: "rgba(0,0,0,0.7)", color: "white", padding: "10px 20px", borderRadius: 20 },
-  statusDot: { display: "inline-block", width: 10, height: 10, background: "#0f0", borderRadius: "50%", marginRight: 5 },
-  chatBox: { flex: 1, overflowY: "auto", padding: "20px", display: "flex", flexDirection: "column", gap: "10px", maxHeight: "250px" },
-  myMsg: { alignSelf: "flex-end", background: "#007AFF", color: "white", padding: "8px 12px", borderRadius: "15px 15px 0 15px" },
-  theirMsg: { alignSelf: "flex-start", background: "rgba(255,255,255,0.2)", color: "white", padding: "8px 12px", borderRadius: "15px 15px 15px 0" },
-  inputForm: { display: "flex", padding: "0 20px 10px", gap: 10 },
-  input: { flex: 1, padding: 10, borderRadius: 20, border: "none" },
-  sendBtn: { borderRadius: "50%", width: 40, height: 40, border: "none", background: "#007AFF", color: "white", cursor: "pointer" },
-  micBtn: { width: 80, height: 80, borderRadius: "50%", border: "4px solid white", margin: "0 auto", fontSize: 30, cursor: "pointer", color: "white" }
+  dashboard: {
+    height: "100vh",
+    width: "100vw",
+    overflow: "hidden",
+    position: "relative",
+    backgroundColor: "#1a1a1a",
+    fontFamily: "'Segoe UI', Roboto, Helvetica, Arial, sans-serif",
+  },
+  mapContainer: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    width: "100%",
+    height: "100%",
+    zIndex: 1,
+  },
+  loadingScreen: {
+    height: "100%",
+    display: "flex",
+    flexDirection: "column",
+    alignItems: "center",
+    justifyContent: "center",
+    color: "#7f8c8d",
+    gap: "20px",
+    letterSpacing: "2px",
+  },
+  topBar: {
+    position: "absolute",
+    top: 20,
+    left: 20,
+    right: 20,
+    zIndex: 10,
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "center",
+    pointerEvents: "none", // Let clicks pass through to map where unoccupied
+  },
+  statusBadge: {
+    background: "rgba(0, 0, 0, 0.6)",
+    backdropFilter: "blur(10px)",
+    padding: "10px 20px",
+    borderRadius: "30px",
+    display: "flex",
+    alignItems: "center",
+    gap: "10px",
+    border: "1px solid rgba(255,255,255,0.1)",
+    pointerEvents: "auto",
+  },
+  statusText: {
+    color: "white",
+    fontSize: "12px",
+    fontWeight: "bold",
+    letterSpacing: "1px",
+  },
+  alertButton: {
+    background: "#c0392b",
+    color: "white",
+    border: "none",
+    padding: "10px 20px",
+    borderRadius: "30px",
+    fontWeight: "bold",
+    display: "flex",
+    alignItems: "center",
+    gap: "8px",
+    cursor: "pointer",
+    boxShadow: "0 4px 15px rgba(192, 57, 43, 0.4)",
+    pointerEvents: "auto",
+  },
+  console: {
+    position: "absolute",
+    bottom: 20,
+    left: 20,
+    right: 20,
+    zIndex: 10,
+    display: "flex",
+    gap: "15px",
+    height: "220px",
+    alignItems: "flex-end",
+  },
+  chatWindow: {
+    flex: 1,
+    background: "rgba(0, 0, 0, 0.8)",
+    backdropFilter: "blur(15px)",
+    borderRadius: "16px",
+    border: "1px solid rgba(255,255,255,0.1)",
+    height: "100%",
+    display: "flex",
+    flexDirection: "column",
+    overflow: "hidden",
+    boxShadow: "0 8px 32px rgba(0, 0, 0, 0.3)",
+  },
+  chatFeed: {
+    flex: 1,
+    padding: "15px",
+    overflowY: "auto",
+    display: "flex",
+    flexDirection: "column",
+    gap: "10px",
+  },
+  msgSelf: {
+    alignSelf: "flex-end",
+    background: "#2980b9",
+    color: "white",
+    padding: "8px 14px",
+    borderRadius: "15px 15px 0 15px",
+    fontSize: "14px",
+    maxWidth: "80%",
+  },
+  msgOther: {
+    alignSelf: "flex-start",
+    background: "#34495e",
+    color: "#ecf0f1",
+    padding: "8px 14px",
+    borderRadius: "15px 15px 15px 0",
+    fontSize: "14px",
+    maxWidth: "80%",
+  },
+  msgLabel: {
+    display: "block",
+    fontSize: "9px",
+    opacity: 0.7,
+    marginBottom: "2px",
+    textTransform: "uppercase",
+  },
+  inputRow: {
+    display: "flex",
+    padding: "10px",
+    gap: "10px",
+    borderTop: "1px solid rgba(255,255,255,0.1)",
+    background: "rgba(0,0,0,0.2)",
+  },
+  input: {
+    flex: 1,
+    background: "rgba(255,255,255,0.1)",
+    border: "none",
+    padding: "10px 15px",
+    borderRadius: "8px",
+    color: "white",
+    outline: "none",
+  },
+  sendBtn: {
+    background: "#2980b9",
+    border: "none",
+    width: "40px",
+    borderRadius: "8px",
+    color: "white",
+    cursor: "pointer",
+  },
+  micControl: {
+    display: "flex",
+    flexDirection: "column",
+    alignItems: "center",
+    gap: "8px",
+  },
+  micBtn: {
+    width: "70px",
+    height: "70px",
+    borderRadius: "50%",
+    border: "2px solid rgba(255,255,255,0.2)",
+    color: "white",
+    cursor: "pointer",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    transition: "background 0.3s ease",
+  },
+  micLabel: {
+    color: "white",
+    fontSize: "10px",
+    fontWeight: "bold",
+    letterSpacing: "1px",
+    textShadow: "0 2px 4px rgba(0,0,0,0.5)",
+  }
 };
-
-export default App;
